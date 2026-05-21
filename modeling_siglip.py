@@ -78,7 +78,7 @@ class SiglipVisionEmbeddings(nn.Module):
         )
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        _, _, height, width = pixel_values.shape # [batch_size, channels, height, width]
+        # pixel_values.shape - [batch_size, channels, height, width]
 
         patch_embeds = self.patch_embedding(pixel_values) # output shape - [batch_size, embed_dim, num_patches_H, num_patches_W] # [bs, 768, 14, 14] 
                                                           # where num_patches_H = height // patch_size, num_patches_W = width // patch_size
@@ -112,7 +112,7 @@ class SiglipAttention(nn.Module):
         self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
-        self_out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
     def forward(self, hidden_states:torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
         # hidden_states: [batch_size, num_patches, embed_dim] 
@@ -287,7 +287,7 @@ class SiglipVisionModel(nn.Module):
         self.config = config
         self.vision_model =  SiglipVisionTransformer(config)
 
-    def forward(self, pixel_values) -> Tuple:
+    def forward(self, pixel_values) -> tuple:
         # [batch_size, channels, height, width] -> [batch_size, num_patches, embedding_dim]
         return self.vision_model(pixel_values=pixel_values)
 
