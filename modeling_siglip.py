@@ -4,7 +4,9 @@ import torch.nn as nn
 # Paligemma comes in different sizes and each one has a different config
 # So, we include a configuration class
 class SiglipVisionConfig:
-
+    '''
+    Config class for creating multiple configurations of SigLIP transformer encoder
+    '''
     def __init__(
             self,
             hidden_size=768,                  # size of embedding vector
@@ -34,6 +36,13 @@ class SiglipVisionConfig:
 
 
 class SiglipVisionEmbeddings(nn.Module):
+    '''
+    An Embeddings class that 
+        - takes images as tensors 
+        - divided into patches
+        - converts patches to embeddings using convolution
+        - adds Positional Encoding to patch embeddings
+    '''
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.config = config
@@ -87,6 +96,9 @@ class SiglipVisionEmbeddings(nn.Module):
     
 
 class SiglipAttention(nn.Module):
+    '''
+    Single Multihead Attention block
+    '''
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.config = config
@@ -166,6 +178,9 @@ class SiglipAttention(nn.Module):
 
     
 class SiglipMLP(nn.Module):
+    '''
+    Multi-Layer Perceptron used in the each Encoder block after normalized multihead-headattention block
+    '''
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size)
@@ -182,6 +197,15 @@ class SiglipMLP(nn.Module):
 
 
 class SiglipVisionEncoderLayer(nn.Module):
+    '''
+    A single Encoder Module that is eventually staked multiple times on itself
+
+    Consists of:
+        - First Layer-Normalization layer
+        - A Multihead-Attention block (SiglipAttention)
+        - Second Layer-Normalization layer
+        - A Multi-layer perceptron (SiglipMLP)
+    '''
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.embed_dim = config.hidden_size
@@ -207,6 +231,11 @@ class SiglipVisionEncoderLayer(nn.Module):
     
     
 class SiglipVisionEncoder(nn.Module):
+    '''
+    Contains a stack of encoder blocks (SiglipVisionEncoderLayer).
+
+    Stack has 'config.num_hidden_layers' number of encoder blocks
+    '''
     def __init__(self, config:SiglipVisionConfig):
         super().__init__()
         self.config = config
@@ -224,6 +253,12 @@ class SiglipVisionEncoder(nn.Module):
 
 
 class SiglipVisionTransformer(nn.Module):
+    '''
+    The entire SigLIP Transformer Encoder. Consists of:
+        - Embeddings class (SiglipVisionEmbeddings) - Image tensor -> patches -> Patch Embeddings (with Positional Encoding)
+        - Encoder class (SiglipVisionEncoder) - Initial patch embeddings -> Contextualized Patch Embeddings
+        - A Layer-Normalization layer
+    '''
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.config = config
