@@ -11,7 +11,7 @@ class SiglipVisionConfig:
             self,
             hidden_size=768,                  # size of embedding vector
             intermediate_size=3072,           # linear layer in FFN. Usually 3x or 4x the hidden size
-            num_hidden_layers=12,             # number of layers of this vision transformer encoder 
+            num_hidden_layers=12,             # number of blocks of this vision transformer encoder 
             num_attention_heads=12,
             num_channels=3,
             image_size=224,                   # image shape of 224 x 224
