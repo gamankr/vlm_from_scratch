@@ -70,7 +70,8 @@ class SiglipVisionEmbeddings(nn.Module):
             'position_ids',
             torch.arange(self.num_positions).expand((1,-1)), # Returns a new view of the self.tensor with singleton dimensions (dimensions with size 1)
                                                              # expanded to a larger size. Passing -1 as the size for a dimension means not changing the
-                                                             # size of that dimension. Can also use .unsqueeze(0)
+                                                             # size of that dimension. Tensor can be also expanded to a larger number of dimensions, and 
+                                                             # the new ones will be appended at the front. Can also use .unsqueeze(0)
                                                              # Expaned in order to add to the patch embedding correctly                                                             
             persistent=False  # Buffers, by default, are persistent and will be saved alongside parameters. This behavior can be changed by setting 
                               # "persistent" to False. The only difference between a persistent buffer and a non-persistent buffer is that the latter 
