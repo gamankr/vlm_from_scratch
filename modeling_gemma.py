@@ -10,7 +10,7 @@ class GemmaConfig():
                  vocab_size,                     # no. of tokens in vocabulary
                  hidden_size,                    # the size of each embedding
                  intermediate_size,              # size of the MLP/ Feed-forward layers in each block
-                 num_hidden_layers,              # number of blocks in the decoder
+                 num_hidden_layers,              # number of decoder blocks in the decoder
                  num_attention_heads,            # no. of heads for Queries (part of Grouped Query Attention)
                  num_key_value_heads,            # no. of heads for Keys/Values
                  head_dim = 256,                 # size of dimension of each head
@@ -68,20 +68,71 @@ class PaliGemmaConfig():
         self.text_config.num_image_tokens = (self.vision_config.image_size // self.vision_config.patch_size) ** 2 # No. of patches in an image
         self.vision_config.projection_dim = projection_dim
 
-class PaliGemmaMultiModalProjector(nn.Module):
-    '''
-    Linear Projection after SigLIP Encoder that changes the embedding dimension of SigLIP encoder to the 
-    embedding dimension used in the Gemma decoder
-    '''
-    def __init__(self, config: PaliGemmaConfig):
+class GemmaRMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
-        self.linear = nn.Linear(config.vision_config.hidden_size, config.projection_dim, bias=True)
+        self.eps = eps
+        self.weight = nn.Parameter(torch.zeros(dim))
 
-    def forward(self, image_features):
-        # [batch_size, num_patches, embed_dim] -> [batch_size, num_patched, projection_dim]
-        hidden_states = self.linear(image_features)
-        return hidden_states
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) # 1 / sqrt(...)
+                                                                           # 'eps' is added to avoid division by zero
+                                                                           # in case calculation results in value zero
     
+    def forward(self, x):
+        output = self._norm(x.float())
+        # Llama does x.to(float16) * w whilst Gemma is (x * w).to(float16)
+        # See https://github.com/huggingface/transformers/pull/29402
+        output *= (1.0 + self.weight.float()) # gamma variable in RMS normalization is an updatable weight
+        return output.type_as(x)
+
+class GemmaModel(nn.Module):
+    '''
+    Gemma Transformer Decoder
+    '''
+    def __init__(self, config: GemmaConfig):
+        super().__init__()
+        self.config = config
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        # If specified, the entries at `padding_idx` in nn.Embedding do not contribute to the gradient;
+        # Therefore, the embedding vector at `padding_idx` is not updated during training
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+
+        self.layers = nn.ModuleList([GemmaDecoderLayer(config, layer_idx) for layer_idx in config.num_hidden_layers])
+        self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_prop_eps)
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+    
+    def forward(self,
+                attention_mask: torch.Tensor | None = None,
+                position_ids: torch.LongTensor | None = None,
+                inputs_embeds: torch.FloatTensor | None = None,
+                kv_cache: KV_Cache | None = None
+                ) -> torch.FloatTensor:
+        # [batch_size, seq_len, hidden_size]
+        hidden_states = inputs_embeds
+        # [batch_size, seq_len, hidden_size]
+        normalizer = torch.tensor(self.config.hidden_size**0.5, dtype=hidden_states.dtype)
+        hidden_states *= normalizer
+
+        for decoder_layer in self.layers:
+            # [batch_size, seq_len, hidden_size]
+            hidden_states = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                kv_cache=kv_cache
+            )
+        
+        # [batch_size, seq_len, hidden_size]
+        hidden_states = self.norm(hidden_states)
+
+        # [batch_size, seq_len, hidden_size]
+        return hidden_states
+ 
 class GemmaForCausalLM(nn.Module):
     '''
     Gemma Transformer Decoder + Language Modeling Head
@@ -130,6 +181,19 @@ class GemmaForCausalLM(nn.Module):
 
         return return_data
 
+class PaliGemmaMultiModalProjector(nn.Module):
+    '''
+    Linear Projection after SigLIP Encoder that changes the embedding dimension of SigLIP encoder to the 
+    embedding dimension used in the Gemma decoder
+    '''
+    def __init__(self, config: PaliGemmaConfig):
+        super().__init__()
+        self.linear = nn.Linear(config.vision_config.hidden_size, config.projection_dim, bias=True)
+
+    def forward(self, image_features):
+        # [batch_size, num_patches, embed_dim] -> [batch_size, num_patched, projection_dim]
+        hidden_states = self.linear(image_features)
+        return hidden_states
 
 class PaliGemmaForConditionalGeneration(nn.Module):
     '''
@@ -270,8 +334,9 @@ class PaliGemmaForConditionalGeneration(nn.Module):
 
         # 1. Extract the input text embeddings
 
-        # The input text embeddings
+        # input embeddings (text embedding + placeholders for image embeddings)
         # shape: (batch_size, seq_len, hidden_size)
+        # 'self.language_model.get_input_embeddings()' returns a nn.Embedding layer to which 'input_ids' is given as input argument
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
 
         # 2. Produce contextualized patch embeddings and process them
