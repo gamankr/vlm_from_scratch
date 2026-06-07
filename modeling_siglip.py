@@ -172,6 +172,7 @@ class SiglipAttention(nn.Module):
         attn_output = attn_output.transpose(1,2).contiguous()
         # Combine last 2 dimensions back to embed_dim - [batch_size, num_patches, embed_dim]
         attn_output = attn_output.reshape(batch_size, seq_len, self.embed_dim)
+        
         # Multiply by W_o - [batch_size, num_patches, embed_dim]
         attn_output = self.out_proj(attn_output)
 
