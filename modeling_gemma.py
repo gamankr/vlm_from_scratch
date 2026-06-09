@@ -128,7 +128,71 @@ def repeat_kv(hidden_states: torch.Tensor,
     hidden_states = hidden_states[:, :, None, :, :].expand(batch_size, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch_size, num_key_value_heads * n_rep, slen, head_dim) # Reshaped to match the shape same as query heads
 
+class GemmaRotaryEmbedding(nn.Module):
+    '''
+    Uses GPT-NeoX style RoPE
 
+    The difference - https://github.com/Lightning-AI/litgpt/issues/1214 - GPT-NeoX style RoPE vs. GPT-J style RoPE
+
+    GPT-NeoX style RoPE implementation (used by HuggingFace) - https://github.com/huggingface/transformers/issues/25199
+    GPT-J style RoPE implementation (as per original paper by Meta) - https://github.com/meta-llama/llama/blob/6c7fe276574e78057f917549435a2554000a876d/llama/model.py#L64-L74
+    '''
+    def __init__(self, 
+                 dim, 
+                 max_position_embeddings = 2028,
+                 base = 10000,
+                 device = None):
+        super().__init__()
+
+        self.dim = dim # Set to head_dim - dimension of the attention head
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+
+        # Calculate the theta according to the formula theta_i = base^(-2i/dim) where i = 0, 1, 2,..., dim/2
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim))
+        self.register_buffer("inv_freq", tensor=inv_freq, persistent=False)
+
+    @torch.no_grad()
+    def forward(self, x, position_ids, seq_len=None):
+        # x : [batch_size, num_heads, seq_len, head_dim]
+        self.inv_freq.to(x.device)
+        # inv_freq_expanded: [batch_size, head_dim // 2, 1]
+        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        # position_ids_expanded: [batch_size, 1, seq_len]
+        position_ids_expanded = position_ids[:, None, :].float()
+        device_type = x.device.type
+        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+        with torch.autocast(device_type=device_type, enabled=False):
+            # Multiply each theta by the position (which is the argument for sin and cos function)
+            # freqs: [batch_size, head_dim // 2, 1] @ [batch_size, 1, seq_len] --> [batch_size, seq_len, head_dim // 2]
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1,2)
+            
+            # emb: [batch_size, seq_len, head_dim // 2] --> [batch_size, seq_len, head_dim]
+            # Implemented in a different way in HuggingFace implementation - https://github.com/huggingface/transformers/issues/25199
+            emb = torch.concat((freqs,freqs), dim=-1)
+            # cos, sin: [batch_size, seq_len, head_dim]
+            cos = emb.cos()
+            sin = emb.sin()
+
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+    
+def rotate_half(x):
+    # Rotates half the hidden dims of the input using GPT-NeoX style RoPE
+    x1 = x[..., : x.shape[-1] // 2] # Takes the first half of the last dimension
+    x2 = x[..., x.shape[-1] // 2 :] # Takes the second half of the last dimension
+    return torch.concat((x1, x2), dim=-1)
+
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
+    cos = cos.unsqueeze(unsqueeze_dim) # Add the head dim
+    sin = sin.unsqueeze(unsqueeze_dim) # Add the head dim
+    # Apply the formula (34) of the Rotary Positional Encoding Paper 
+    # Implemented in a different way in HuggingFace implementation - https://github.com/huggingface/transformers/issues/25199
+    # Implementation as per original paper by Meta - https://github.com/meta-llama/llama/blob/6c7fe276574e78057f917549435a2554000a876d/llama/model.py#L64-L74
+    # The difference - https://github.com/Lightning-AI/litgpt/issues/1214 - GPT-NeoX style RoPE vs. GPT-J style RoPE
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
+ 
 class GemmaAttention(nn.Module):
     def __init__(self, 
                  config: GemmaConfig, 
@@ -329,7 +393,7 @@ class GemmaModel(nn.Module):
                 attention_mask: torch.Tensor | None = None,
                 position_ids: torch.LongTensor | None = None,
                 inputs_embeds: torch.FloatTensor | None = None,
-                kv_cache: KV_Cache | None = None
+                kv_cache: KVCache | None = None
                 ) -> torch.FloatTensor:
         # [batch_size, seq_len, hidden_size]
         hidden_states = inputs_embeds
@@ -375,7 +439,7 @@ class GemmaForCausalLM(nn.Module):
                 position_ids: torch.LongTensor | None = None,
                 inputs_embeds: torch.FloatTensor | None = None,
                 kv_cache: KVCache | None = None,
-                ) -> tuple:
+                ) -> dict:
         
         # inputs_embeds - [batch_size, seq_len, hidden_size]
         # outputs - [batch_size, seq_len, hidden_size]
