@@ -234,7 +234,7 @@ class GemmaAttention(nn.Module):
                 **kwargs,
                 ) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
         
-        batch_size, q_len = hidden_states.size() # [batch_size, seq_len, hidden_size]
+        batch_size, q_len, _ = hidden_states.size() # [batch_size, seq_len, hidden_size]
         # [batch_size, seq_len, num_heads_Q * head_dim]
         query_states = self.q_proj(hidden_states)
         # [batch_size, seq_len, num_heads_KV * head_dim]
@@ -355,7 +355,7 @@ class GemmaDecoderLayer(nn.Module):
         residual = hidden_states
         # No shape change
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(
+        hidden_states, _ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -383,7 +383,7 @@ class GemmaModel(nn.Module):
         # Therefore, the embedding vector at `padding_idx` is not updated during training
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
 
-        self.layers = nn.ModuleList([GemmaDecoderLayer(config, layer_idx) for layer_idx in config.num_hidden_layers])
+        self.layers = nn.ModuleList([GemmaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_prop_eps)
 
     def get_input_embeddings(self):
@@ -451,6 +451,7 @@ class GemmaForCausalLM(nn.Module):
         )
 
         hidden_states = outputs
+        # logits - [batch_size, seq_len, vocab_size]
         logits = self.lm_head(hidden_states)
         logits = logits.float()
 
@@ -501,7 +502,7 @@ class PaliGemmaForConditionalGeneration(nn.Module):
                                         image_features: torch.Tensor,   # resized contextualized patch embeddings
                                         inputs_embeds: torch.Tensor,    # input embeddings (text embedding + placeholders for image embeddings)
                                         input_ids: torch.Tensor,        # processed prompt from tokenizer with image tokens (contains 
-                                                                        # positions of tokens in vocabulary)
+                                                                        # ids (unique identifiers) of tokens in vocabulary)
                                         attention_mask: torch.Tensor,   # attention mask from tokenizer (same size as input_ids filled 
                                                                         # with '1' to indicate to attend to all tokens. '0' usually indicates
                                                                         # masked tokens (tokens which should not be attended to))
@@ -608,7 +609,8 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         return final_embedding, causal_mask, position_ids        
     
     def forward(self,
-                input_ids: torch.LongTensor = None,            # processed prompt from tokenizer with image tokens (contains positions of tokens in vocabulary)
+                input_ids: torch.LongTensor = None,            # processed prompt from tokenizer with image tokens (contains 
+                                                               # ids (unique identifiers) of tokens in vocabulary) of tokens in vocabulary)
                 pixel_values: torch.FloatTensor = None,        # Processed Images
                 attention_mask: torch.Tensor | None = None,    # attention_mask from tokenizer
                 kv_cache: KVCache | None = None,              
@@ -626,7 +628,7 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         
         # Images -> Transformer encoder -> Patch embeddings
         # [batch_size, channels, height, width] -> [batch_size, num_patches, embed_dim]
-        selected_image_features = self.vision_tower(pixel_values=pixel_values) 
+        selected_image_features = self.vision_tower(pixel_values=pixel_values)
 
         # Patch embeddings -> Linear Projector -> Resized patch embeddings (to the size of text embeddings)
         # [batch_size, num_patches, embed_dim] -> [batch_size, num_patches, hidden_size]

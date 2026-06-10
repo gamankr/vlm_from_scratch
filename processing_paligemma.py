@@ -52,8 +52,8 @@ def normalize(image: np.ndarray,
 
 
 def process_images(
-        images: list(Image.Image),
-        size: dict(str, int) = None,
+        images: list[Image.Image],
+        size: dict[str, int] = None,
         resample: Image.Resampling = None,
         rescale_factor: float = None,
         image_mean: float | list[float] | None = None,
